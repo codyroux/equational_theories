@@ -63,7 +63,7 @@ instance SetoidOfLaws {α} (Γ : Ctx α): Setoid (FreeMagma α) :=
   ⟨ RelOfLaws Γ, RelOfLaws.isEquivalence Γ ⟩
 
 -- This is the quotient type we care about: it will be a model of Γ.
-def FreeMagmaWithLaws {α} (Γ : Ctx α) : Type := Quotient (SetoidOfLaws Γ)
+def FreeMagmaWithLaws {α} (Γ : Ctx α) : Type* := Quotient (SetoidOfLaws Γ)
 
 @[simp]
 def embed {α} (Γ : Ctx α) (x : FreeMagma α) : FreeMagmaWithLaws Γ := Quotient.mk _ x

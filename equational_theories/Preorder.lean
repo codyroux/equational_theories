@@ -6,7 +6,9 @@ open Law
 
 namespace Law.MagmaLaw
 
-variable {α : Type}
+universe u v
+
+variable {α : Type u}
 
 /--
 A magma law `l₁` implies a law `l₂` if in any Magma `G` where `l₁` holds, `l₂` also holds.
@@ -14,15 +16,15 @@ A magma law `l₁` implies a law `l₂` if in any Magma `G` where `l₁` holds, 
 We have to explicitly quantify the type `G` and the Magma instance `[Magma G]` instead of
 using them as parameters so that the implication holds in any Magma `G`.
 -/
-def implies (l₁ l₂ : MagmaLaw α) := ∀ {G : Type} [Magma G],
-  satisfies G l₁ → satisfies G l₂
+def implies (l₁ l₂ : MagmaLaw α) : Prop :=
+  ∀ {G : Type v} [Magma G], satisfies G l₁ → satisfies G l₂
 
 
 /--
 If a law `l₁` implies a law `l₂`, then we say `l₁ ≤ l₂`.
 -/
-instance : LE (MagmaLaw α) where
-  le l₁ l₂ := l₁.implies l₂
+instance leLaw : LE (MagmaLaw α) where
+  le l₁ l₂ := implies.{u, v} l₁ l₂
 
 theorem implies_set {α} (l₁ l₂ : MagmaLaw α) (h : l₁.implies l₂) :
   { Sigma.mk G inst | @satisfies α G inst l₁ } ⊆ { Sigma.mk G inst | @satisfies α G inst l₂ } := by
@@ -72,7 +74,7 @@ theorem implies_trans {l₁ l₂ l₃ : MagmaLaw α} : l₁ ≤ l₂ → l₂ �
   dsimp only [satisfies, satisfiesPhi] at *
   exact h₂ (h₁ h)
 
-instance : Preorder (MagmaLaw α) where
+instance preorderLe : Preorder.{max u v} (MagmaLaw α) where
   le_refl := implies_refl
   le_trans := fun _ _ _ ↦ implies_trans
 
