@@ -9,6 +9,9 @@ inductive FreeMagma (α : Type u)
   | Fork : FreeMagma α → FreeMagma α → FreeMagma α
   deriving DecidableEq
 
+instance (α : Type u) [Inhabited α] : Inhabited (FreeMagma α) where
+  default := .Leaf default
+
 instance (α : Type u) : Magma (FreeMagma α) where
   op := FreeMagma.Fork
 
@@ -25,6 +28,15 @@ def FreeMagma.toJson {α} [ToJson α] : FreeMagma α → Json
 open Lean in
 instance {α} [ToJson α] : ToJson (FreeMagma α) where
   toJson := FreeMagma.toJson
+
+def FreeMagma.toString {α} [ToString α] (outermost : Bool) : FreeMagma α → String
+  | FreeMagma.Leaf x => s!"{x}"
+  | FreeMagma.Fork x y =>
+    let s := s!"{x.toString false} ◇ {y.toString false}"
+    if outermost then s else s!"({s})"
+
+instance {α} [ToString α] : ToString (FreeMagma α) where
+  toString := FreeMagma.toString true
 
 infixl:65 " ⋆ " => FreeMagma.Fork
 
@@ -82,7 +94,7 @@ theorem evalInMagma_comp {α β} {G} [Magma G] (f : α → β) (g : β → G) (m
 
 theorem evalHom_comp_fmapHom {α β G} [Magma G] (f : α → β) (g : β → G) :
     (fmapHom f).comp (evalHom g) = evalHom (g ∘ f) := by
-  ext m; apply evalInMagma_fmapHom
+  ext; apply evalInMagma_fmapHom
 
 theorem fmapHom_comp' {α β γ} (f : α → β) (g : β → γ) (m : FreeMagma α) :
     fmapHom g (fmapHom f m) = fmapHom (g ∘ f) m := by
@@ -90,24 +102,24 @@ theorem fmapHom_comp' {α β γ} (f : α → β) (g : β → γ) (m : FreeMagma 
 
 theorem fmapHom_comp {α β γ} (f : α → β) (g : β → γ) :
     (fmapHom f).comp (fmapHom g) = fmapHom (g ∘ f) := by
-  ext m; apply fmapHom_comp'
+  ext; apply fmapHom_comp'
 
 theorem fmapHom_id {α} (m : FreeMagma α) : fmapHom id m = m := evalInMagma_leaf _
 
- theorem EvalFreeMagmaUniversalProperty {α : Type u} {G : Type v} [Magma G] (f : α → G)
-    : ∀ g : FreeMagma α →◇ G, g.toFun ∘ Lf = f → evalInMagma f = g.toFun := by
-   intros g glift
+ theorem EvalFreeMagmaUniversalProperty {α : Type u} {G : Type v} [Magma G] (f : α → G) :
+    ∀ g : FreeMagma α →◇ G, g.toFun ∘ Lf = f → evalInMagma f = g.toFun := by
+   intro g glift
    let rec equiv : ∀ tx : FreeMagma α, evalInMagma f tx = g.toFun tx := fun tx ↦
       match tx with
-      | FreeMagma.Leaf x => Eq.symm $ congrFun glift x
-      | FreeMagma.Fork txleft txright => Eq.trans
-         (congrArg (fun t ↦ t ◇ evalInMagma f txright) (equiv txleft)) $ Eq.trans
-         (congrArg (fun t ↦ g.toFun txleft ◇ t) (equiv txright))
-         (Eq.symm $ g.map_op' txleft txright)
+      | FreeMagma.Leaf x => (congrFun glift x).symm
+      | FreeMagma.Fork txleft txright =>
+        (congrArg (fun t ↦ t ◇ evalInMagma f txright) (equiv txleft)).trans
+          ((congrArg (fun t ↦ g.toFun txleft ◇ t) (equiv txright)).trans
+            (g.map_op' txleft txright).symm)
    exact (funext equiv)
 
- theorem FmapFreeMagmaUniversalProperty {α : Type u} {β : Type u} (f : α → β)
-    : ∀ g : FreeMagma α →◇ FreeMagma β, g ∘ Lf = Lf ∘ f → fmapFreeMagma f = g :=
+ theorem FmapFreeMagmaUniversalProperty {α : Type u} {β : Type u} (f : α → β) :
+      ∀ g : FreeMagma α →◇ FreeMagma β, g ∘ Lf = Lf ∘ f → fmapFreeMagma f = g :=
     EvalFreeMagmaUniversalProperty (Lf ∘ f)
 
 def Mem {α} (a : α) : FreeMagma α → Prop
@@ -118,29 +130,36 @@ def first {α} : FreeMagma α → α
   | Lf a => a
   | lchild ⋆ _ => lchild.first
 
+def last {α} : FreeMagma α → α
+  | Lf a => a
+  | _ ⋆ rchild => rchild.last
+
 theorem first_mem {α} : ∀ m : FreeMagma α, Mem m.first m
   | Lf _ => rfl
   | lchild ⋆ _ => .inl lchild.first_mem
 
 lemma Fin0_impossible (x : FreeMagma (Fin 0)) : False := nomatch x.first
 
-def forks {α : Type} : FreeMagma α → Nat
+def forks {α} : FreeMagma α → Nat
   | .Leaf _ => 0
   | .Fork m1 m2 => (m1.forks + m2.forks).succ
 
-theorem forks_left_lt_self {α : Type} (x y : FreeMagma α) : x.forks < (x ⋆ y).forks := by
+theorem forks_left_lt_self {α} (x y : FreeMagma α) : x.forks < (x ⋆ y).forks := by
   simp only [forks]
   omega
 
-theorem forks_right_lt_self {α : Type} (x y : FreeMagma α) : y.forks < (x ⋆ y).forks := by
+theorem forks_right_lt_self {α} (x y : FreeMagma α) : y.forks < (x ⋆ y).forks := by
   simp only [forks]
   omega
 
-def length {α : Type} : FreeMagma α → Nat
+@[simp] theorem map_forks {α β} (m : FreeMagma α) (f : α → β) :
+    (fmapHom f m).forks = m.forks := by simp [fmapHom]; induction m <;> simp [forks, *]
+
+@[simp] def length {α} : FreeMagma α → Nat
   | .Leaf _ => 1
   | .Fork m1 m2 => FreeMagma.length m1 + FreeMagma.length m2
 
-lemma length_eq_succ_forks {α} (x: FreeMagma α): x.length = x.forks.succ := by
+lemma length_eq_succ_forks {α} (x: FreeMagma α) : x.length = x.forks.succ := by
   induction x with
   | Leaf =>
     simp [length, forks]
@@ -148,21 +167,42 @@ lemma length_eq_succ_forks {α} (x: FreeMagma α): x.length = x.forks.succ := by
     simp [hx, hy, length, forks]
     omega
 
-theorem length_pos {α : Type} (x : FreeMagma α): 0 < FreeMagma.length x := by
+theorem length_pos {α} (x : FreeMagma α): 0 < FreeMagma.length x := by
   rw [length_eq_succ_forks]
   exact Nat.zero_lt_succ _
 
 @[simp]
-theorem length_ne_0 {α : Type} (x : FreeMagma α) : FreeMagma.length x ≠ 0 :=
+theorem length_ne_0 {α} (x : FreeMagma α) : FreeMagma.length x ≠ 0 :=
   Nat.not_eq_zero_of_lt x.length_pos
 
-theorem length_left_lt_self {α : Type} (x y : FreeMagma α) : x.length < (x ⋆ y).length := by
+theorem length_left_lt_self {α} (x y : FreeMagma α) : x.length < (x ⋆ y).length := by
   simp only [length, Nat.lt_add_right_iff_pos]
   exact length_pos y
 
-theorem length_right_lt_self {α : Type} (x y : FreeMagma α) : y.length < (x ⋆ y).length := by
+theorem length_right_lt_self {α} (x y : FreeMagma α) : y.length < (x ⋆ y).length := by
   simp only [length, Nat.lt_add_left_iff_pos]
   exact length_pos x
+
+@[simp] def toList {α} : FreeMagma α → List α
+  | Lf a => [a]
+  | l ⋆ r => l.toList ++ r.toList
+
+private def toListTR {α} : FreeMagma α → List α := go [] where
+  go : List α → FreeMagma α → List α
+  | acc, Lf a => a :: acc
+  | acc, l ⋆ r => go (go acc r) l
+
+@[csimp] private theorem toList_eq_toListTR : @toList = @toListTR := by
+  funext α m
+  have (m acc) : @toListTR.go α acc m = toList m ++ acc := by
+    induction m generalizing acc <;> simp [toListTR.go, toList, *]
+  simpa using (this m []).symm
+
+theorem toList_length {α} (m : FreeMagma α) : m.toList.length = m.length := by
+  induction m <;> simp [*]
+
+@[simp] def map_toList {α β} (m : FreeMagma α) (f : α → β) :
+    (fmapHom f m).toList = m.toList.map f := by simp [fmapHom]; induction m <;> simp [*]
 
 def elems {α} [DecidableEq α] : (m : FreeMagma α) → {l : List α // l.Nodup ∧ ∀ a, a ∈ l ↔ Mem a m}
   | Lf a => ⟨[a], List.nodup_singleton _, by simp [Mem]⟩

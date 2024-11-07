@@ -5,7 +5,7 @@ open FreeMagma
 
 namespace Law
 
-structure MagmaLaw (α : Type*) where
+@[ext] structure MagmaLaw (α : Type*) where
   lhs : FreeMagma α
   rhs : FreeMagma α
 deriving DecidableEq
@@ -17,6 +17,9 @@ abbrev NatMagmaLaw := MagmaLaw Nat
 open Lean in
 instance {α} [ToJson α] : ToJson (MagmaLaw α) where
   toJson := fun ⟨lhs, rhs⟩ => .mkObj [("lhs", Lean.toJson lhs), ("rhs", Lean.toJson rhs)]
+
+instance {α} [ToString α] : ToString (MagmaLaw α) where
+  toString := fun ⟨lhs, rhs⟩ => s!"{lhs} ≃ {rhs}"
 
 end Law
 
@@ -40,7 +43,7 @@ local infix:50 " ⊢ " =>  derive
 -- We keep this in type, because we're going to want to gather
 -- the (finite!) set of required axioms later.
 /-- Definition for derivability -/
-inductive derive.{u} {α : Type u} (Γ : Ctx α) : MagmaLaw α → Type u :=
+inductive derive.{u} {α : Type u} (Γ : Ctx α) : MagmaLaw α → Type u where
   | Ax {E} (h : E ∈ Γ) : Γ ⊢ E
   | Ref {t} : Γ ⊢ t ≃ t
   | Sym {t u} : Γ ⊢ t ≃ u → Γ ⊢ u ≃ t
@@ -52,7 +55,7 @@ inductive derive.{u} {α : Type u} (Γ : Ctx α) : MagmaLaw α → Type u :=
 local infix:50 " ⊢' " =>  derive'
 
 /-- Definition for derivability where Subst can only be applied to Ax -/
-inductive derive'.{u, v} {α : Type u} {β : Type v} (Γ : Ctx α) : MagmaLaw β → Type (max u v) :=
+inductive derive'.{u, v} {α : Type u} {β : Type v} (Γ : Ctx α) : MagmaLaw β → Type (max u v) where
   | SubstAx {E} (h : E ∈ Γ) (σ) : Γ ⊢' E.lhs ⬝ σ ≃ E.rhs ⬝ σ
   | Ref {t} : Γ ⊢' t ≃ t
   | Sym {t u} : Γ ⊢' t ≃ u → Γ ⊢' u ≃ t
@@ -110,11 +113,11 @@ namespace Law
 
 namespace MagmaLaw
 
-def symm {α} (l : MagmaLaw α) : MagmaLaw α := {lhs := l.rhs, rhs:=l.lhs}
+def symm {α} (l : MagmaLaw α) : MagmaLaw α := {lhs := l.rhs, rhs := l.lhs}
 
 @[simp]
-theorem symm_symm {α} (l : MagmaLaw α) : l.symm.symm = l := by
-  simp [symm]
+theorem symm_symm {α} (l : MagmaLaw α) : l.symm.symm = l :=
+  rfl
 
 def map {α β} (f : α → β) : MagmaLaw α → MagmaLaw β
   | ⟨lhs, rhs⟩ => ⟨fmapHom f lhs, fmapHom f rhs⟩
@@ -126,8 +129,15 @@ theorem map_comp {α β γ} (f : α → β) (g : β → γ) (m : MagmaLaw α) :
     (m.map f).map g = m.map (g ∘ f) := by
   simp [map, fmapHom_comp']
 
+theorem map_symm {α β} (f : α → β) (m : MagmaLaw α) : m.symm.map f = (m.map f).symm := rfl
+
 def Mem {α} (a : α) (m : MagmaLaw α) : Prop :=
   m.lhs.Mem a ∨ m.rhs.Mem a
+
+def toList {α} (m : MagmaLaw α) : List α := m.lhs.toList ++ m.rhs.toList
+
+@[simp] def map_toList {α β} (m : MagmaLaw α) (f : α → β) :
+    (m.map f).toList = m.toList.map f := by simp [map, toList]
 
 def elems {α} [DecidableEq α] (m : MagmaLaw α) :
     {l : List α // l.Nodup ∧ ∀ a, a ∈ l ↔ Mem a m} := by
@@ -159,13 +169,12 @@ def toNat {α} [DecidableEq α] (m : MagmaLaw α) : MagmaLaw ℕ :=
 theorem pmap_eq_map {α β} (m : MagmaLaw α)
     (f : (a : α) → Mem a m → β) (g : α → β) (h : ∀ a h, f a h = g a) :
     m.pmap f = m.map g := by
-  simp [pmap, FreeMagma.pmap, map]; constructor <;> (apply FreeMagma.pmap_eq_map; intros; apply h)
-
+  simp only [pmap, map, mk.injEq]; constructor <;> exact FreeMagma.pmap_eq_map _ _ _ fun _ _ ↦ h _ _
 end MagmaLaw
 
 theorem satisfiesPhi_symm_law {α G} [Magma G] (φ : α → G) (E : MagmaLaw α)
     (h : satisfiesPhi φ E) : satisfiesPhi φ E.symm := by
-  simp only [satisfiesPhi, MagmaLaw.symm]; exact h.symm
+  rw [satisfiesPhi, MagmaLaw.symm]; exact h.symm
 
 theorem satisfiesPhi_map {α β G} [Magma G] {φ : β → G} {f : α → β} {E : MagmaLaw α} :
     satisfiesPhi φ (E.map f) ↔ satisfiesPhi (φ ∘ f) E := by
@@ -174,14 +183,13 @@ theorem satisfiesPhi_map {α β G} [Magma G] {φ : β → G} {f : α → β} {E 
 theorem satisfiesPhi_pmap {α β G} [Magma G] {φ : β → G} {ψ : α → G}
     (E : MagmaLaw α) (f : (a : α) → E.Mem a → β) (H : ∀ a h, φ (f a h) = ψ a) :
     satisfiesPhi φ (E.pmap f) ↔ satisfiesPhi ψ E := by
-  simp [satisfiesPhi, MagmaLaw.pmap]
-  rw [evalInMagma_pmap _ fun a h => H a (.inl h),
-      evalInMagma_pmap _ fun a h => H a (.inr h)]
+  simp only [satisfiesPhi, MagmaLaw.pmap]
+  rw [evalInMagma_pmap _ fun a h => H a (.inl h), evalInMagma_pmap _ fun a h => H a (.inr h)]
 
 theorem satisfiesPhi_pmap_mk {α G} [Magma G] {φ : α → G} {E : MagmaLaw α}
     (P : α → Prop) (hp : ∀ a, E.Mem a → P a) :
-    satisfiesPhi (φ ·.1) (E.pmap fun a h => Subtype.mk a (hp a h)) ↔ satisfiesPhi φ E := by
-  apply satisfiesPhi_pmap; intros; rfl
+    satisfiesPhi (φ ·.1) (E.pmap fun a h => Subtype.mk a (hp a h)) ↔ satisfiesPhi φ E :=
+  satisfiesPhi_pmap _ _ (fun _ _ ↦ rfl)
 
 theorem satisfiesPhi_attach {α G} [Magma G] {φ : α → G} {E : MagmaLaw α} :
     satisfiesPhi (φ ·.1) E.attach ↔ satisfiesPhi φ E := satisfiesPhi_pmap_mk ..
@@ -189,6 +197,11 @@ theorem satisfiesPhi_attach {α G} [Magma G] {φ : α → G} {E : MagmaLaw α} :
 theorem satisfiesPhi_symm {α G} [Magma G] (φ : α → G) (w₁ w₂ : FreeMagma α)
     (h : satisfiesPhi φ (w₁ ≃ w₂)) : satisfiesPhi φ (w₂ ≃ w₁) :=
   satisfiesPhi_symm_law φ (w₁ ≃ w₂) h
+
+
+theorem satisfiesPhi_evalHom {α G : Type} [Magma G] (φ : α → G) (E : MagmaLaw α) (f : G →◇ G) :
+    satisfiesPhi (f ∘ φ) E ↔ f (E.lhs ⬝ φ) = f (E.rhs ⬝ φ) := by
+  rw [satisfiesPhi, ← @evalInMagma_hom, ← evalInMagma_hom]
 
 theorem equiv_satisfiesPhi {α G H} [Magma G] [Magma H] {φ : α → G} (e : G ≃◇ H) {E : MagmaLaw α} :
     satisfiesPhi (e ∘ φ) E ↔ satisfiesPhi φ E := by
@@ -207,10 +220,11 @@ theorem satisfies_map_injective {α β G} [Magma G] (f : α → β) (hf : f.Inje
   have : Inhabited α := ⟨E.lhs.first⟩
   have ⟨g, hg⟩ := hf.hasLeftInverse
   rw [← MagmaLaw.map_id E, ← show g ∘ f = id from funext hg, ← MagmaLaw.map_comp, satisfiesPhi_map]
-  apply H
+  exact H _
 
 theorem satisfies_map_equiv {α β G} [Magma G] (f : α ≃ β) {E : MagmaLaw α} :
-    G ⊧ E.map f ↔ G ⊧ E := satisfies_map_injective _ f.injective
+    G ⊧ E.map f ↔ G ⊧ E :=
+  satisfies_map_injective _ f.injective
 
 theorem satisfies_pmap_mk {α G} [DecidableEq α] [Magma G] {E : MagmaLaw α}
     (P : α → Prop) (hp : ∀ a, E.Mem a → P a) :
@@ -238,12 +252,15 @@ theorem satisfies_symm {α G} [Magma G] {w₁ w₂ : FreeMagma α} (h : G ⊧ w�
 theorem satisfies_equiv {α G H} [Magma G] [Magma H] (e : G ≃◇ H) {E : MagmaLaw α} :
     G ⊧ E ↔ H ⊧ E := by
   constructor <;> intro h φ
-  · rw [← equiv_satisfiesPhi e.symm]; apply h
-  · rw [← equiv_satisfiesPhi e]; apply h
+  · rw [← equiv_satisfiesPhi e.symm]; exact h _
+  · rw [← equiv_satisfiesPhi e]; exact h _
 
 theorem satisfiesSet_symm {α G} [Magma G] {Γ : Ctx α}
   (h :  G ⊧ Γ) : G ⊧ (·.symm) '' Γ :=
   fun _ ⟨_, ⟨hEsymm, hEsymmE⟩⟩ ↦ hEsymmE ▸ Law.satisfies_symm (h _ hEsymm)
+
+theorem satisfiesSet_singleton {α G} [Magma G] {E : MagmaLaw α} : G ⊧ {E} ↔ G ⊧ E := by
+  simp [satisfiesSet]
 
 theorem satisfiesSet_equiv {α G H} [Magma G] [Magma H] (e : G ≃◇ H) {Γ : Ctx α} :
     G ⊧ Γ ↔ H ⊧ Γ :=

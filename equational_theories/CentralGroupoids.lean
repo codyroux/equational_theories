@@ -13,7 +13,7 @@
   will eventually resolve all remaining implications from 168.
 -/
 
-import equational_theories.AllEquations
+import equational_theories.Equations.All
 import equational_theories.FactsSyntax
 import equational_theories.MemoFinOp
 import equational_theories.DecideBang
@@ -79,7 +79,7 @@ local instance : Magma (Fin 9) := MagmaA2T
 def equiv_MagmaA2_MagmaA2T : (Fin 3 × Fin 3) ≃◇ (Fin 9) where
   toEquiv := equiv_F3xF3_F9
   map_op' := by
-    intros x y
+    intro x y
     match x with
     | (⟨n, _⟩, ⟨m, _⟩) =>
       match y with

@@ -3,21 +3,26 @@ import equational_theories.EquationalResult
 namespace Closure
 open Lean Parser Elab Command
 
+structure GraphEdge where
+  lhs : String
+  rhs : String
+deriving DecidableEq, Hashable, Lean.ToJson, Lean.FromJson
+
 inductive Edge
-  | implication : Implication → Edge
-  | nonimplication : Implication → Edge
-  deriving DecidableEq, Hashable
+  | implication : GraphEdge → Edge
+  | nonimplication : GraphEdge → Edge
+deriving DecidableEq, Hashable
 
 def Edge.isTrue : Edge → Bool
   | .implication _ => true
   | .nonimplication _ => false
 
-def Edge.get : Edge → Implication
+def Edge.get : Edge → GraphEdge
   | .nonimplication x | .implication x => x
 
-def Edge.lhs : Edge → String := Implication.lhs ∘ get
+def Edge.lhs : Edge → String := GraphEdge.lhs ∘ get
 
-def Edge.rhs : Edge → String := Implication.rhs ∘ get
+def Edge.rhs : Edge → String := GraphEdge.rhs ∘ get
 
 inductive Outcome
   /-- the implication has an explicit proof -/
@@ -150,7 +155,7 @@ instance {α : Type} [BEq α] [Hashable α] : GetElem? (DenseNumbering α) α Na
   getElem? num a := num.index[a]?
 
 def DenseNumbering.fromArray {α : Type} [BEq α] [Hashable α] (elts : Array α) : DenseNumbering α :=
-  let index := Std.HashMap.ofList (elts.mapIdx (fun i x => (x, i.val))).toList
+  let index := Std.HashMap.ofList (elts.mapIdx (fun i x => (x, i))).toList
   ⟨elts, index⟩
 
 def DenseNumbering.map {α β : Type} [BEq α] [BEq β] [Hashable α] [Hashable β] (num : DenseNumbering α) (f : α → β) : DenseNumbering β :=
@@ -167,10 +172,10 @@ def equationSet (inp : Array EntryVariant) : Std.HashSet String := Id.run do
   let mut eqs : Std.HashSet String := {}
   for imp in inp do
     match imp with
-    | .implication ⟨lhs, rhs⟩ =>
+    | .implication ⟨lhs, rhs, _⟩ =>
       eqs := eqs.insert lhs
       eqs := eqs.insert rhs
-    | .facts ⟨satisfied, refuted⟩ =>
+    | .facts ⟨satisfied, refuted, _⟩ =>
       for eq in satisfied ++ refuted do
         eqs := eqs.insert eq
     | .unconditional eq =>
@@ -190,9 +195,9 @@ def toEdges (inp : Array EntryVariant) : Array Edge := Id.run do
   let mut nonimplies : Array Bitset := Array.mkArray eqs.size (Bitset.mk eqs.size)
   for imp in inp do
     match imp with
-    | .implication ⟨lhs, rhs⟩ =>
+    | .implication ⟨lhs, rhs, _⟩ =>
       edges := edges.push (.implication ⟨lhs, rhs⟩)
-    | .facts ⟨satisfied, refuted⟩ =>
+    | .facts ⟨satisfied, refuted, _⟩ =>
       for f1 in satisfied do
         for f2 in refuted do
           nonimplies := nonimplies.modify eqs[f1]! (fun x ↦ x.set eqs[f2]!)
@@ -208,8 +213,7 @@ structure Reachability where
   reachable : Array Bitset
   components : Array (Array Nat)
 
-def closure_aux (inp : Array EntryVariant) (eqs : DenseNumbering String) : IO Reachability := do
-
+def closure_aux (inp : Array EntryVariant) (duals: Std.HashMap Nat Nat) (eqs : DenseNumbering String) : IO Reachability := do
   -- construct the implication/non-implication graph
   let n := eqs.size
   let mut graph_size := 2 * n
@@ -222,7 +226,7 @@ def closure_aux (inp : Array EntryVariant) (eqs : DenseNumbering String) : IO Re
       graph := graph.modify (eqs[imp.rhs]! + n) (fun x => x.push (eqs[imp.lhs]! + n))
       revgraph := revgraph.modify (eqs[imp.lhs]!) (fun x => x.push eqs[imp.rhs]!)
       revgraph := revgraph.modify (eqs[imp.lhs]! + n) (fun x => x.push (eqs[imp.rhs]! + n))
-    | .facts ⟨satisfied, refuted⟩ =>
+    | .facts ⟨satisfied, refuted, _⟩ =>
       if satisfied.size * refuted.size < satisfied.size + refuted.size + 1 then
         for lhs in satisfied do
           for rhs in refuted do
@@ -230,14 +234,33 @@ def closure_aux (inp : Array EntryVariant) (eqs : DenseNumbering String) : IO Re
             revgraph := revgraph.modify (eqs[rhs]! + n) (fun x => x.push eqs[lhs]!)
       else
         let dummy := graph_size
-        graph_size := graph_size + 1
+        graph_size := graph_size + 2
         graph := graph.push (refuted.map (eqs[·]! + n))
         revgraph := revgraph.push (satisfied.map (eqs[·]!))
+        -- this is for the dual implications
+        graph := graph.push #[]
+        revgraph := revgraph.push #[]
         for f1 in satisfied do
           graph := graph.modify eqs[f1]! (fun x ↦ x.push dummy)
         for f1 in refuted do
           revgraph := revgraph.modify (eqs[f1]! + n) (fun x ↦ x.push dummy)
     | _ => pure ()
+
+  let duals := Array.ofFn λ (i: Fin graph_size) ↦
+    if i < n then
+      duals.getD i i
+    else if i < 2 * n then
+      n + duals.getD (i - n) (i - n)
+    else
+      i ^^^ 1
+
+  for i in [0:graph_size], neighbors in graph do
+    let i' := duals[i]!
+    for j in neighbors do
+      let j' := duals[j]!
+      if i != i' ∨ j != j' then
+        graph := graph.modify i' (fun x => x.push j')
+        revgraph := revgraph.modify j' (fun x => x.push i')
 
   let mut vis : Array Bool := Array.mkArray graph_size false
   let mut order : Array Nat := Array.mkEmpty graph_size
@@ -285,7 +308,7 @@ instance {m : Type → Type} : ForIn m Reachability (Nat × Nat × Bool) where
       (f : (Nat × Nat × Bool) → β → m (ForInStep β)) := do
     let mut v := state
     for i in reachability.components, i2 in reachability.reachable do
-      if i.back >= reachability.size then continue
+      if i.back! >= reachability.size then continue
       for j in reachability.components, j2 in [:reachability.components.size] do
         if i2.get j2 then
           for x in i do
@@ -297,17 +320,21 @@ instance {m : Type → Type} : ForIn m Reachability (Nat × Nat × Bool) where
               | .yield a => v := a
     return v
 
+def number_duals (duals: Std.HashMap String String) (eqs: DenseNumbering String) :=
+  Std.HashMap.ofList <| duals.toList.map (λ (i, j) ↦ (eqs[i]!, eqs[j]!))
+
 /--
 This computes the closure of the implications/non-implications represented by `inp`.
 -/
-def closure (inp : Array EntryVariant) : IO (Array Edge) := do
+def closure (inp : Array EntryVariant) (duals: Std.HashMap String String) : IO (Array Edge) := do
   let eqs := number_equations inp
   let n := eqs.size
+  let duals := number_duals duals eqs
 
   -- extract the implications
   let mut ans : Array Edge := Array.mkEmpty (n*n)
 
-  for ⟨x, y, is_true⟩ in ← closure_aux inp eqs do
+  for ⟨x, y, is_true⟩ in ← closure_aux inp duals eqs do
     unless x == y do
       if is_true then
         ans := ans.push (.implication ⟨eqs.in_order[x]!, eqs.in_order[y]!⟩)
@@ -316,17 +343,18 @@ def closure (inp : Array EntryVariant) : IO (Array Edge) := do
 
   pure ans
 
-def list_outcomes (res : Array Entry) : IO (Array String × Array (Array Outcome)) := do
+def list_outcomes (res : Array Entry) (duals: Std.HashMap String String): IO (Array String × Array (Array Outcome)) := do
   let rs := res.map (·.variant)
   let prs := res.filter (·.proven) |>.map (·.variant)
   let eqs := number_equations rs
+  let duals := number_duals duals eqs
   let n := eqs.size
   let mut outcomes : Array (Array Outcome) := Array.mkArray n (Array.mkArray n .unknown)
   for edge in toEdges prs do
     outcomes := outcomes.modify eqs[edge.lhs]! (fun a ↦ a.set! eqs[edge.rhs]!
       (.explicit_theorem edge.isTrue))
 
-  for ⟨x, y, is_true⟩ in ← closure_aux prs eqs do
+  for ⟨x, y, is_true⟩ in ← closure_aux prs duals eqs do
     outcomes := outcomes.modify x (fun a ↦ a.modify y
                 fun y ↦ if y = .unknown then .implicit_theorem is_true else y)
 
@@ -334,16 +362,17 @@ def list_outcomes (res : Array Entry) : IO (Array String × Array (Array Outcome
     outcomes := outcomes.modify eqs[edge.lhs]! (fun a ↦ a.modify eqs[edge.rhs]!
       fun y ↦ if y = .unknown then .explicit_conjecture edge.isTrue else y)
 
-  for ⟨x, y, is_true⟩ in ← closure_aux rs eqs do
+  for ⟨x, y, is_true⟩ in ← closure_aux rs duals eqs do
     outcomes := outcomes.modify x (fun a ↦ a.modify y
                 fun y ↦ if y = .unknown then .implicit_conjecture is_true else y)
 
   return (eqs.in_order, outcomes)
 
-def outcomes_mod_equiv (inp : Array EntryVariant) : IO (DenseNumbering (Array String) × Array (Array (Option Bool))) := do
+def outcomes_mod_equiv (inp : Array EntryVariant) (duals: Std.HashMap String String) : IO (DenseNumbering (Array String) × Array (Array (Option Bool))) := do
   let eqs := number_equations inp
   let n := eqs.size
-  let reachable ← closure_aux inp eqs
+  let duals := number_duals duals eqs
+  let reachable ← closure_aux inp duals eqs
   let comps := reachable.components.filter (·[0]! < n) |> DenseNumbering.fromArray
 
   let mut implies : Array (Array (Option Bool)) :=
@@ -355,9 +384,35 @@ def outcomes_mod_equiv (inp : Array EntryVariant) : IO (DenseNumbering (Array St
         if i2.get j2 then
           if j[0]! < n then
             implies := implies.modify comps[j]! (fun x ↦ x.set! comps[i]! true)
-          else if j.back < 2*n then
+          else if j.back! < 2*n then
             implies := implies.modify comps[i]! (fun x ↦ x.set! comps[j.map (·-n)]! false)
 
   return (comps.map (fun ids => ids.map (eqs.in_order[·]!)), implies)
+
+section DualityRelation
+
+structure DualityRelation where
+  dualEquations : Std.HashMap String String
+
+def DualityRelation.ofFile (path : String) : IO DualityRelation := do
+  let dualsJson := Json.parse (←IO.FS.readFile path) |>.toOption.get!
+  let mut dualEquations : Std.HashMap String String := {}
+  for pair in dualsJson.getArr?.toOption.get! do
+    let a := s!"Equation{pair.getArr?.toOption.get![0]!.getNat?.toOption.get!}"
+    let b := s!"Equation{pair.getArr?.toOption.get![1]!.getNat?.toOption.get!}"
+    dualEquations := dualEquations.insert a b
+    dualEquations := dualEquations.insert b a
+  pure ⟨dualEquations⟩
+
+def DualityRelation.dual (rel : DualityRelation) (imp : GraphEdge) : Option GraphEdge :=
+  if isCoreEquationName imp.lhs && isCoreEquationName imp.rhs then
+    some ⟨rel.dualEquations.getD imp.lhs imp.lhs, rel.dualEquations.getD imp.rhs imp.rhs⟩
+  else
+    none
+
+def getStoredDualityRelations :=
+  DualityRelation.ofFile "data/duals.json"
+
+end DualityRelation
 
 end Closure

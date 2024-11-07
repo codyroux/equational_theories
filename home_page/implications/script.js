@@ -12,6 +12,16 @@ const ids = [
     "unknown"
 ];
 
+const EXPLICIT_CONJECTURE_FALSE = 0;
+const EXPLICIT_CONJECTURE_TRUE = 1;
+const EXPLICIT_PROOF_FALSE = 2;
+const EXPLICIT_PROOF_TRUE = 3;
+const IMPLICIT_CONJECTURE_FALSE = 4;
+const IMPLICIT_CONJECTURE_TRUE = 5;
+const IMPLICIT_PROOF_FALSE = 6;
+const IMPLICIT_PROOF_TRUE = 7;
+const UNKNOWN = 8;
+
 // Assuming arr is already defined
 // const arr = [...];  // Your RLE encoded array
 
@@ -25,10 +35,6 @@ function decodeRLE(arr) {
     return decoded;
 }
 
-function mapThroughLUT(decoded) {
-    return decoded.map(index => ids[index]);
-}
-
 function reshape(array, rows, cols) {
     const result = [];
     for (let i = 0; i < rows; i++) {
@@ -40,13 +46,11 @@ function reshape(array, rows, cols) {
 // Decode RLE
 const decoded = decodeRLE(arr);
 
-// Map through LUT
-const mapped = mapThroughLUT(decoded);
-
-// Reshape to 2694x2694
-const implications = reshape(mapped, 4694, 4694);
+// Reshape to 4694x4694
+const implications = reshape(decoded, 4694, 4694);
 
 const GRAPHITI_BASE_URL = "https://teorth.github.io/equational_theories/graphiti/"
+const FME_BASE_URL = "https://teorth.github.io/equational_theories/fme/"
 
 const listPage = document.getElementById('listPage');
 const detailPage = document.getElementById('detailPage');
@@ -55,6 +59,7 @@ const equationList = document.getElementById('equationList');
 const selectedEquation = document.getElementById('selectedEquation');
 const selectedEquationDual = document.getElementById('selectedEquationDual');
 const selectedEquationGraphitiLinks = document.getElementById('selectedEquationGraphitiLinks');
+const smallestMagmaLink = document.getElementById('smallestMagmaLink');
 const impliesList = document.getElementById('impliesList');
 const antiImpliesList = document.getElementById('antiImpliesList');
 const unknownImpliesList = document.getElementById('unknownImpliesList');
@@ -65,18 +70,68 @@ const backButton = document.getElementById('backButton');
 const showOnlyExplicitProofs = document.getElementById('showOnlyExplicitProofs');
 const treatConjectedAsUnknownList = document.getElementById('treatConjectedAsUnknownList');
 const treatConjectedAsUnknownDetail = document.getElementById('treatConjectedAsUnknownDetail');
+const hideFullySolvedCheckbox = document.getElementById('hideFullySolved');
 
 let currentEquationIndex = null;
+
+let showEquivalences = false;
+let filteredCachedItems = [];
+
+let cachedItems = [];
+let cachedItemElements = [];
+
+function downloadEquationListCSV() {
+    showDownloadPopup();
+    const rows = Array.from(equationList.children);
+    const csv = "\uFEFF" + rows.map((row) => (
+        Array.from(row.children).map(
+            (element) => element.textContent
+        ).join(",")))
+        .join("\n");
+
+    const filename = 'export_explorer_' + new Date().toLocaleDateString() + '.csv';
+    downloadStringAsCSV(csv, filename);
+}
+
+function downloadRawImplicationsCSV() {
+    const text_to_number=[-2, 2, -4, 4, -1, 1, -3, 3, 0];
+    showDownloadPopup();
+    const csv = implications.map(
+        (equation) => equation.map(
+            (status) => text_to_number[status]
+        ).join(",")
+    ).join("\n")
+    downloadStringAsCSV(csv, 'export_raw_implications_' + new Date().toLocaleDateString() + '.csv');
+}
+
+function downloadStringAsCSV(string, filename) {
+        // Export code gathered from https://stackoverflow.com/a/56370447/7059087
+        var link = document.createElement('a');
+        link.style.display = 'none';
+        link.setAttribute('target', '_blank');
+        link.setAttribute('href', 'data:text/csv;charset=utf-8,' + encodeURIComponent(string));
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+}
 
 function showPage(pageId) {
     document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
     document.getElementById(pageId).classList.add('active');
 }
 
-let showEquivalences = false;
-let filteredCachedItems = [];
+function hideVisibility(elementId) {
+    const element = document.getElementById(elementId);
+    element.style.display = "none";
+}
+function showVisibility(elementId) {
+    const element = document.getElementById(elementId);
+    element.style.display = "block";
+}
 
 function filterEquations() {
+    // First filter by whether to collapse by equivalence class
     if (showEquivalences) {
         filteredCachedItems = cachedItems;
     } else {
@@ -90,21 +145,28 @@ function filterEquations() {
             return false;
         });
     }
+
+    if (hideFullySolvedCheckbox.checked) {
+        // Further filter by whether they are fully solved (e.g. they have any unknowns/conjectures remaining.)
+        filteredCachedItems = filteredCachedItems.filter(item => {
+            return item.stats.unknown != 0 || item.stats.unknownBy != 0
+        });
+    }
 }
 
 
 // Pre-compute boolean flags for each status
-const statusFlags = {
-    explicit_conjecture_false: { explicit: true, conjecture: true, isTrue: false },
-    explicit_conjecture_true: { explicit: true, conjecture: true, isTrue: true },
-    explicit_proof_false: { explicit: true, conjecture: false, isTrue: false },
-    explicit_proof_true: { explicit: true, conjecture: false, isTrue: true },
-    implicit_conjecture_false: { explicit: false, conjecture: true, isTrue: false },
-    implicit_conjecture_true: { explicit: false, conjecture: true, isTrue: true },
-    implicit_proof_false: { explicit: false, conjecture: false, isTrue: false },
-    implicit_proof_true: { explicit: false, conjecture: false, isTrue: true },
-    unknown: { explicit: false, conjecture: false, isTrue: false }
-};
+const statusFlags = [
+    { explicit: true, conjecture: true, isTrue: false },
+    { explicit: true, conjecture: true, isTrue: true },
+    { explicit: true, conjecture: false, isTrue: false },
+    { explicit: true, conjecture: false, isTrue: true },
+    { explicit: false, conjecture: true, isTrue: false },
+    { explicit: false, conjecture: true, isTrue: true },
+    { explicit: false, conjecture: false, isTrue: false },
+    { explicit: false, conjecture: false, isTrue: true },
+    { explicit: false, conjecture: false, isTrue: false }
+];
 
 function isImplies(status, onlyExplicit = false, treatConjecturedAsUnknown = false) {
     const flags = statusFlags[status];
@@ -117,42 +179,56 @@ function isAntiImplies(status, onlyExplicit = false, treatConjecturedAsUnknown =
     const flags = statusFlags[status];
     if (onlyExplicit && !flags.explicit) return false;
     if (treatConjecturedAsUnknown && flags.conjecture) return false;
-    return !flags.isTrue && status !== 'unknown';
+    return !flags.isTrue && status != UNKNOWN;
 }
 function isUnknown(status, treatConjecturedAsUnknown = false) {
-    return status === 'unknown' || (treatConjecturedAsUnknown && status.includes('conjecture'));
+    const flags = statusFlags[status];
+    return status == UNKNOWN || (treatConjecturedAsUnknown && flags.conjecture);
 }
 
-function calculateStats(index, treatConjecturedAsUnknown = false) {
-    const stats = {implies: 0, impliedBy: 0, antiImplies: 0, antiImpliedBy: 0, unknown: 0, unknownBy: 0};
-    for (let i = 0; i < implications.length; i++) {
-        if (i === index) continue;
-        const forwardStatus = implications[index][i];
-        const backwardStatus = implications[i][index];
+function calculateStats(treatConjecturedAsUnknown = false) {
+    let sccStats = []
+    for (let i = 0; i < equiv.length; i++) {
+        let stats = {implies: 0, impliedBy: 0, antiImplies: 0, antiImpliedBy: 0, unknown: 0, unknownBy: 0};
+        for (let j = 0; j < equiv.length; j++) {
+            let adjustment = 0;
+            if (i == j) {
+                adjustment = 1;
+            }
 
-        if (isImplies(forwardStatus, false, treatConjecturedAsUnknown)) stats.implies++;
-        else if (isAntiImplies(forwardStatus, false, treatConjecturedAsUnknown)) stats.antiImplies++;
-        else stats.unknown++;
+            const forwardStatus = implications[equiv[i][0]][equiv[j][0]];
+            const backwardStatus = implications[equiv[j][0]][equiv[i][0]];
 
-        if (isImplies(backwardStatus, false, treatConjecturedAsUnknown)) stats.impliedBy++;
-        else if (isAntiImplies(backwardStatus, false, treatConjecturedAsUnknown)) stats.antiImpliedBy++;
-        else stats.unknownBy++;
+            if (isImplies(forwardStatus, false, treatConjecturedAsUnknown)) stats.implies += equiv[j].length - adjustment;
+            else if (isAntiImplies(forwardStatus, false, treatConjecturedAsUnknown)) stats.antiImplies += equiv[j].length - adjustment;
+            else stats.unknown += equiv[j].length - adjustment;
+
+            if (isImplies(backwardStatus, false, treatConjecturedAsUnknown)) stats.impliedBy += equiv[j].length - adjustment;
+            else if (isAntiImplies(backwardStatus, false, treatConjecturedAsUnknown)) stats.antiImpliedBy += equiv[j].length - adjustment;
+            else stats.unknownBy += equiv[j].length - adjustment;
+        }
+        sccStats.push(stats)
     }
-    return stats;
+
+    let overallStats = []
+    for (let i = 0; i < equiv.length; i++) {
+        for (const subidx of equiv[i]) {
+            overallStats[subidx] = sccStats[i]
+        }
+    }
+
+    return overallStats
 }
-
-let cachedItems = [];
-let cachedItemElements = [];
-
 
 function initializeEquationList() {
     const treatConjecturedAsUnknown = treatConjectedAsUnknownList.checked;
+    const overallStats = calculateStats(treatConjecturedAsUnknown)
     cachedItems = equations.map((eq, index) => {
-        const stats = calculateStats(index, treatConjecturedAsUnknown);
+        const stats = overallStats[index];
         const element = document.createElement('div');
         element.className = 'equation-item';
         element.dataset.index = index;
-	const isspecial = special.indexOf(eq.split("[")[0]) !== -1 ? "special" : "";
+        const isspecial = commentary[index+1] == undefined ? "" : "special"; // issue #547
         element.innerHTML = `
             <div class="equation-name ${isspecial}">${eq}</div>
             <div class="equation-stat implies">${stats.implies}</div>
@@ -184,8 +260,9 @@ function initializeEquationList() {
 
 function updateEquationListStats() {
     const treatConjecturedAsUnknown = treatConjectedAsUnknownList.checked;
+    const overallStats = calculateStats(treatConjecturedAsUnknown)
     cachedItems.forEach((item) => {
-        const stats = calculateStats(item.index, treatConjecturedAsUnknown);
+        const stats = overallStats[item.index];
         item.stats = stats;
         item.statElements.implies.textContent = stats.implies;
         item.statElements.impliedBy.textContent = stats.impliedBy;
@@ -247,10 +324,14 @@ function renderImplications(index) {
     }
 
     currentEquationIndex = index;
+    selectedEquation.textContent = equations[index];
     selectedEquation.dataset.index = index;
+
     if (commentary[index+1] === undefined) {
-        selectedEquation.textContent = equations[index];
+        hideVisibility("equationCommentary")
+        equationCommentary.innerHTML = "";
     } else {
+        showVisibility("equationCommentary")
         equationCommentary.innerHTML = commentary[index+1];
     }
 
@@ -309,13 +390,13 @@ function renderImplications(index) {
 	let more_same = !showEquivalences && eqClass.length > 1 ? ` (+ ${eqClass.length-1} equiv.)` : "";
 
 	const eq = equations[i];
-	const isspecial = special.indexOf(eq.split("[")[0]) !== -1 ? "special" : "";
+	const isspecial = commentary[i+1] == undefined ? "" : "special"; // issue #547
 
 	const forwardStatus = row[index];
 	const backwardStatus = implications[index][i];
 
 	    [forwardStatus, backwardStatus].forEach((status, statusIndex) => {
-            const isConjectured = status.includes('conjecture');
+            const isConjectured = statusFlags[status].conjecture
 	        let maybe_prove;
             let forward = statusIndex == 1 ?  index : i;
             let backward = statusIndex == 1 ?  i : index;
@@ -324,14 +405,14 @@ function renderImplications(index) {
                 maybe_prove = ` <a href='${proofhref}'>Prove This!</a>`;
             } else if (isUnknown(status, true)) { // conjectured
 	            let proofhref = gen_proof_url(forward, backward, isImplies(status, false, false) ? "yes" : "no");
-                maybe_prove = ` <a href='${proofhref}'>Prove This!</a>`;
+                maybe_prove = ` <a href='${proofhref}'>Prove This!</a> <a href="show_proof.html?${forward+1},${backward+1}" target="_blank">Show Proof</a>`;
             } else {
                 var does_implies = isImplies(status, false, false);
                 let proofhref;
                 proofhref = gen_proof_url(forward, backward, does_implies ? "yes" : "no");
-                maybe_prove = ` <a href='${proofhref}'>Try This!</a>`;
+                maybe_prove = ` <a href='${proofhref}'>Try This!</a> <a href="show_proof.html?${forward+1},${backward+1}" target="_blank">Show Proof</a>`;
             }
-            const item = `<div uid=${i} class="implication-item ${isspecial} ${status} ${isConjectured ? 'conjectured' : ''}">${eq}${more_same}${maybe_prove}</div>`;
+            const item = `<div uid=${i} class="implication-item ${isspecial} ${ids[status]} ${isConjectured ? 'conjectured' : ''}">${eq}${more_same}${maybe_prove}</div>`;
 
             if (isImplies(status, onlyExplicit, treatConjecturedAsUnknown)) {
 		        statusIndex === 0 ? impliedBy.push(item) : implies.push(item);
@@ -344,15 +425,22 @@ function renderImplications(index) {
 	    });
     });
 
-  selectedEquationGraphitiLinks.innerHTML = `<br>(Visualize <a target="_blank" href="${GRAPHITI_BASE_URL}?render=true&implies=${index+1}&highlight_red=${index+1}">implies</a> and <a target="_blank" href="${GRAPHITI_BASE_URL}?render=true&implied_by=${index+1}&highlight_red=${index+1}">implied by</a> of the equation)`
+  const graphiti_url = `${GRAPHITI_BASE_URL}?render=true&highlight_red=${index+1}`
+  selectedEquationGraphitiLinks.innerHTML = `<br>(Visualize <a target="_blank" href="${graphiti_url}&implies=${index+1}">implies</a> and <a target="_blank" href="${graphiti_url}&implied_by=${index+1}">implied by</a> of the equation, or see <a target="_blank" href="${graphiti_url}&neighborhood_of=${index+1}&neighborhood_of_distance=1">1</a>, <a target="_blank" href="${graphiti_url}&neighborhood_of=${index+1}&neighborhood_of_distance=2">2</a>, <a target="_blank" href="${graphiti_url}&neighborhood_of=${index+1}&neighborhood_of_distance=3">3</a> graph edges away)`
   if (unknownImpliesEqNum.length > 0) {
     const implies = unknownImpliesEqNum.map(x => x + 1)
-    selectedEquationGraphitiLinks.innerHTML += `<br />(Visualize <a target="_blank" href="${GRAPHITI_BASE_URL}?render=true&implies=${index+1},${implies.join(",")}&highlight_red=${index+1}&highlight_blue=${implies.join(",")}&show_unknowns_conjectures=on">implies</a> and <a target="_blank" href="${GRAPHITI_BASE_URL}?render=true&implied_by=${index+1},${implies.join(",")}&highlight_red=${index+1}&highlight_blue=${implies.join(",")}&show_unknowns_conjectures=on">implied by</a> of the equation+unknowns+conjectures</a>)`
+    selectedEquationGraphitiLinks.innerHTML += `<br />(Visualize <a target="_blank" href="${graphiti_url}&implies=${index+1},${implies.join(",")}&highlight_blue=${implies.join(",")}&show_unknowns_conjectures=on">implies</a> and <a target="_blank" href="${graphiti_url}&implied_by=${index+1},${implies.join(",")}&highlight_blue=${implies.join(",")}&show_unknowns_conjectures=on">implied by</a> of the equation+unknowns+conjectures</a>)`
   }
   if (unknownImpliedByEqNum.length > 0) {
     const impliedby = unknownImpliedByEqNum.map(x => x + 1)
-    selectedEquationGraphitiLinks.innerHTML += `<br />(Visualize <a target="_blank" href="${GRAPHITI_BASE_URL}?render=true&implies=${index+1},${impliedby.join(",")}&highlight_red=${index+1}&highlight_blue=${impliedby.join(",")}&show_unknowns_conjectures=on">implies</a> and <a target="_blank" href="${GRAPHITI_BASE_URL}?render=true&implied_by=${index+1},${impliedby.join(",")}&highlight_red=${index+1}&highlight_blue=${impliedby.join(",")}&show_unknowns_conjectures=on">implied by</a> of the equation+unknown bys+conjectured bys</a>)`
+    selectedEquationGraphitiLinks.innerHTML += `<br />(Visualize <a target="_blank" href="${graphiti_url}&implies=${index+1},${impliedby.join(",")}&highlight_blue=${impliedby.join(",")}&show_unknowns_conjectures=on">implies</a> and <a target="_blank" href="${graphiti_url}&implied_by=${index+1},${impliedby.join(",")}&highlight_blue=${impliedby.join(",")}&show_unknowns_conjectures=on">implied by</a> of the equation+unknown bys+conjectured bys</a>)`
   }
+
+  smallest_magma = smallest_magma_data[index+1]
+  smallestMagmaLink.innerHTML = smallest_magma
+    ? `<br />(Size of smallest non-trivial magma: ${smallest_magma.length} <a target="_blank" href="${FME_BASE_URL}?magma=${encodeURIComponent(JSON.stringify(smallest_magma))}">(Explore)</a>)`
+    : `<br />(Size of smallest non-trivial magma: N/A)`
+
 
     impliesList.innerHTML = implies.join('') || 'None';
     antiImpliesList.innerHTML = antiImplies.join('') || 'None';
@@ -417,23 +505,33 @@ showOnlyExplicitProofs.addEventListener('change', () => {
 });
 
 treatConjectedAsUnknownDetail.addEventListener('change', () => {
+    treatConjectedAsUnknownList.checked = treatConjectedAsUnknownDetail.checked;
+    updateEquationListStats();
     if (currentEquationIndex !== null) {
         renderImplications(currentEquationIndex);
     }
 });
 
-// Modify the event listener for the checkbox
 treatConjectedAsUnknownList.addEventListener('change', () => {
+    treatConjectedAsUnknownDetail.checked = treatConjectedAsUnknownList.checked;
     updateEquationListStats();
     renderEquationList();
 });
 
+hideFullySolvedCheckbox.addEventListener('change', () => {
+    filterEquations();
+    renderEquationList();
+});
 
 let currentURL = window.location.href;
 if (currentURL.indexOf('?') > -1) {
     renderImplications(currentURL.split('?')[1]-1);
     showPage('detailPage');
+    requestIdleCallback(() => {
+        initializeEquationList();
+    })
 } else {
+    initializeEquationList();
     renderEquationList();
 }
 
@@ -456,10 +554,10 @@ window.addEventListener('popstate', handleUrlChange);
 document.addEventListener('DOMContentLoaded', function() {
     const timestamp = last_updated.timestamp * 1000; // Convert to milliseconds
     const commitHash = last_updated.commit_hash;
-    
+
     const localDate = new Date(timestamp);
     document.getElementById('lastUpdated').textContent = localDate.toLocaleString();
-    
+
     const commitLink = document.getElementById('commitLink');
     commitLink.href = `https://github.com/teorth/equational_theories/tree/${commitHash}`;
     commitLink.textContent = commitHash.substring(0, 7); // Display first 7 characters of the hash
